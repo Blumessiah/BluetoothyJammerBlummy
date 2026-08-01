@@ -18,6 +18,12 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.util.HashSet
 import androidx.core.content.ContextCompat
 import androidx.core.content.ContextCompat.getSystemService
 
@@ -33,6 +39,8 @@ data class BluetoothDeviceInfo(
     val isSpeaker: Boolean = false,
     val speakerConfidence: SpeakerClassifier.Confidence = SpeakerClassifier.Confidence.LOW,
     val speakerReason: String? = null,
+    val vendor: String? = null,
+    val serviceUuids: List<String>? = null,
 ) {
     /** Human-readable label derived from the classic device class, e.g. "Altavoz". */
     val deviceTypeLabel: String? get() = SpeakerClassifier.describeDeviceClass(deviceClass)
@@ -70,6 +78,9 @@ class ScanNearbyDevices {
 
     private var classicReceiver: BroadcastReceiver? = null
     private var bleScanCallback: ScanCallback? = null
+
+    private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val serviceProbes = HashSet<String>()
 
     @SuppressLint("MissingPermission")
     fun startScanning(context: Context, cb: (List<BluetoothDeviceInfo>) -> Unit) {
@@ -129,6 +140,7 @@ class ScanNearbyDevices {
                 deviceClass = device.bluetoothClass?.deviceClass, bleAppearance = null,
                 source = DeviceSource.PAIRED
             )
+            probeServicesAsync(device.address)
         }
     }
 
@@ -241,7 +253,10 @@ class ScanNearbyDevices {
                         rssi = result.rssi,
                         deviceClass = result.device.bluetoothClass?.deviceClass,
                         bleAppearance = appearance,
-                        source = DeviceSource.BLE
+                        source = DeviceSource.BLE,
+                        serviceUuids = record?.serviceUuids?.map {
+                            ProfileNames.profileName(it.uuid.toString()) ?: ProfileNames.shortUuid(it.uuid.toString())
+                        }
                     )
                 }
 
@@ -291,18 +306,53 @@ class ScanNearbyDevices {
 
     // ---------- Merge + delivery ----------
 
+    /**
+     * One-shot SDP probe: fetches the service records of a remote device once
+     * (classic BR/EDR) and stores the readable profile names. BLE devices get
+     * their services directly from the scan record instead.
+     */
+    @SuppressLint("MissingPermission")
+    private fun probeServicesAsync(address: String) {
+        val key = address.lowercase()
+        synchronized(serviceProbes) {
+            if (serviceProbes.contains(key)) return
+            serviceProbes.add(key)
+        }
+        serviceScope.launch {
+            delay(1500)
+            val device = runCatching { bluetoothAdapter()?.getRemoteDevice(address) }.getOrNull() ?: return@launch
+            runCatching { device.fetchUuidsWithSdp() }
+            delay(3000)
+            val uuids = runCatching { device.uuids }.getOrNull()
+            val names = uuids?.map {
+                ProfileNames.profileName(it.toString()) ?: ProfileNames.shortUuid(it.toString())
+            }
+            if (!names.isNullOrEmpty()) {
+                val k = address.lowercase()
+                val existing = devices[k] ?: return@launch
+                devices[k] = existing.copy(serviceUuids = names)
+                scheduleUpdate()
+            }
+        }
+    }
+
     private fun upsert(
         name: String,
         address: String,
         rssi: Int?,
         deviceClass: Int?,
         bleAppearance: Int?,
-        source: DeviceSource
+        source: DeviceSource,
+        serviceUuids: List<String>? = null
     ) {
         val key = address.lowercase()
         val existing = devices[key]
         val merged: BluetoothDeviceInfo = if (existing == null) {
-            BluetoothDeviceInfo(name, address, rssi, deviceClass, bleAppearance, source)
+            BluetoothDeviceInfo(
+                name, address, rssi, deviceClass, bleAppearance, source,
+                vendor = OuiVendor.vendorFor(address),
+                serviceUuids = serviceUuids
+            )
         } else {
             existing.copy(
                 name = if (existing.name == "Desconocido") name else existing.name,
@@ -310,6 +360,8 @@ class ScanNearbyDevices {
                 deviceClass = existing.deviceClass ?: deviceClass,
                 bleAppearance = existing.bleAppearance ?: bleAppearance,
                 source = if (existing.source == DeviceSource.PAIRED) DeviceSource.PAIRED else source,
+                vendor = existing.vendor ?: OuiVendor.vendorFor(address),
+                serviceUuids = existing.serviceUuids ?: serviceUuids,
             )
         }
         val classification = SpeakerClassifier.classify(merged.name, merged.deviceClass, merged.bleAppearance)
@@ -318,6 +370,9 @@ class ScanNearbyDevices {
             speakerConfidence = classification.confidence,
             speakerReason = classification.reason,
         )
+        if (existing == null && source != DeviceSource.BLE) {
+            probeServicesAsync(address)
+        }
         scheduleUpdate()
     }
 

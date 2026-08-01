@@ -16,7 +16,8 @@ interface BluetoothAttack {
 }
 
 /**
- * Selectable attack types. [create] builds the concrete attack for a target.
+ * Selectable attack types. [create] builds the concrete attack for a target,
+ * applying the TX/Sleep duty cycle when configured.
  */
 enum class AttackType(val displayName: String, val description: String) {
     L2CAP_FLOOD(
@@ -38,13 +39,30 @@ enum class AttackType(val displayName: String, val description: String) {
     ADVERTISE_FLOOD(
         "Advertising Flood (BLE)",
         "Contamina el canal de anuncios BLE con UUIDs aleatorios."
+    ),
+    PROFILE_SPOOF(
+        "Profile Spoofing",
+        "Se hace pasar por perfiles conocidos (A2DP, HID, HFP…) probando conexión con sus UUIDs."
+    ),
+    COMBO(
+        "Combo (L2CAP+GATT+Pairing+SDP)",
+        "Ataque en capas: L2CAP, GATT, Pairing y SDP simultáneos sobre el mismo objetivo."
     );
 
-    fun create(address: String, threads: Int): BluetoothAttack = when (this) {
-        L2CAP_FLOOD -> L2capFloodAttack(address, threads)
-        GATT_FLOOD -> GattFloodAttack(address, threads)
-        PAIRING_FLOOD -> PairingFloodAttack(address, threads)
-        SDP_FLOOD -> SdpFloodAttack(address, threads)
-        ADVERTISE_FLOOD -> AdvertiseFloodAttack(address)
+    fun create(address: String, params: AttackParams = AttackParams()): BluetoothAttack {
+        val base = when (this) {
+            L2CAP_FLOOD -> L2capFloodAttack(address, params.threads, params.rateDelayMs, params.payloadPattern)
+            GATT_FLOOD -> GattFloodAttack(address, params.threads, params.rateDelayMs)
+            PAIRING_FLOOD -> PairingFloodAttack(address, params.threads, params.rateDelayMs)
+            SDP_FLOOD -> SdpFloodAttack(address, params.threads, params.rateDelayMs)
+            ADVERTISE_FLOOD -> AdvertiseFloodAttack(address)
+            PROFILE_SPOOF -> ProfileSpoofAttack(address, params.threads, params.rateDelayMs)
+            COMBO -> ComboAttack(address, params.threads, params.rateDelayMs, params.payloadPattern)
+        }
+        return if (params.txSeconds >= 1 && params.sleepSeconds >= 1) {
+            DutyCycleAttack(base, params.txSeconds, params.sleepSeconds)
+        } else {
+            base
+        }
     }
 }

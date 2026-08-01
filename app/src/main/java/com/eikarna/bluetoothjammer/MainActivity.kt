@@ -36,6 +36,8 @@ class MainActivity : AppCompatActivity() {
     private val scanner = ScanNearbyDevices.getInstance()
     private var onlySpeakers = false
     private var currentDevices: List<BluetoothDeviceInfo> = emptyList()
+    private lateinit var btnAttackSelected: Button
+    private val selectedTargets = LinkedHashMap<String, String>()
 
     companion object {
         private const val PERMISSION_REQUEST_CODE = 101
@@ -47,6 +49,7 @@ class MainActivity : AppCompatActivity() {
 
         listView = findViewById(R.id.deviceListView)
         btnScan = findViewById(R.id.btnScan)
+        btnAttackSelected = findViewById(R.id.btnAttackSelected)
         switchSpeakersOnly = findViewById(R.id.switchSpeakersOnly)
         txtStatus = findViewById(R.id.txtStatus)
 
@@ -57,6 +60,20 @@ class MainActivity : AppCompatActivity() {
         switchSpeakersOnly.setOnCheckedChangeListener { _, checked ->
             onlySpeakers = checked
             refreshList()
+        }
+
+        btnAttackSelected.setOnClickListener { launchSelectedAttack() }
+        listView.setOnItemLongClickListener { _, _, position, _ ->
+            val device = deviceListAdapter.getItem(position) ?: return@setOnItemLongClickListener false
+            if (selectedTargets.containsKey(device.address)) {
+                selectedTargets.remove(device.address)
+                Toast.makeText(this, getString(R.string.target_removed, device.name), Toast.LENGTH_SHORT).show()
+            } else {
+                selectedTargets[device.address] = device.name
+                Toast.makeText(this, getString(R.string.target_added, device.name), Toast.LENGTH_SHORT).show()
+            }
+            updateAttackButton()
+            true
         }
 
         listView.setOnItemClickListener { _, _, position, _ ->
@@ -109,6 +126,24 @@ class MainActivity : AppCompatActivity() {
             onlySpeakers -> getString(R.string.status_filtered, filtered.size)
             else -> getString(R.string.status_total, currentDevices.size, speakers)
         }
+    }
+
+    // ---------- Multi-target selection ----------
+
+    private fun updateAttackButton() {
+        btnAttackSelected.text = getString(R.string.attack_selected, selectedTargets.size)
+        btnAttackSelected.isEnabled = selectedTargets.isNotEmpty()
+    }
+
+    private fun launchSelectedAttack() {
+        if (selectedTargets.isEmpty()) return
+        scanner.stopScanning()
+        val list = ArrayList(selectedTargets.map { (addr, name) -> "$name|$addr" })
+        val intent = Intent(this, AttackActivity::class.java).apply {
+            putStringArrayListExtra("EXTRA_TARGETS", list)
+            putExtra("THREADS", 8)
+        }
+        startActivity(intent)
     }
 
     // ---------- Permissions ----------
@@ -175,7 +210,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun showDeviceInfo(device: BluetoothDeviceInfo) {
         val speakerTag = if (device.isSpeaker) "\nTipo: ALTAPARLANTE" else ""
-        val message = "Name: ${device.name}\nAddress: ${device.address}$speakerTag"
+        val vendorLine = device.vendor?.let { "\nFabricante: $it" } ?: ""
+        val servicesLine = device.serviceUuids?.take(4)?.joinToString(", ")?.let { "\nServicios: $it" } ?: ""
+        val message = "Name: ${device.name}\nAddress: ${device.address}$speakerTag$vendorLine$servicesLine"
 
         val dialogBuilder = AlertDialog.Builder(this)
         dialogBuilder.setTitle("Device Info")
@@ -241,6 +278,8 @@ class MainActivity : AppCompatActivity() {
                 DeviceSource.BLE -> pieces.add("BLE")
             }
             info.deviceTypeLabel?.let { pieces.add(it) }
+            info.vendor?.let { pieces.add(it) }
+            info.serviceUuids?.take(3)?.let { pieces.add("Serv: ${it.joinToString(",")}") }
             if (info.isSpeaker) info.speakerReason?.let { pieces.add("Altavoz ($it)") }
             info.rssi?.let { pieces.add("RSSI $it") }
             metaView.text = if (pieces.isEmpty()) "Sin datos" else pieces.joinToString(" · ")

