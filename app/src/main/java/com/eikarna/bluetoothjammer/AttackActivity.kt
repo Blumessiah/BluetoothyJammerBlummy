@@ -33,6 +33,8 @@ class AttackActivity : AppCompatActivity() {
     private lateinit var viewTxSeconds: TextInputEditText
     private lateinit var viewSleepSeconds: TextInputEditText
     private lateinit var spinnerPayloadPattern: Spinner
+    private lateinit var viewPayloadSize: TextInputEditText
+    private lateinit var switchBombard: MaterialSwitch
     private lateinit var spinnerAttackType: Spinner
     private lateinit var buttonStartStop: MaterialButton
     private lateinit var logAttack: MaterialTextView
@@ -45,6 +47,8 @@ class AttackActivity : AppCompatActivity() {
     private var delayMs: Int = 0
     private var txSeconds: Int = 0
     private var sleepSeconds: Int = 0
+    private var payloadSize: Int = 0
+    private var bombard: Boolean = false
 
     private val startedAttacks = mutableListOf<BluetoothAttack>()
     private var startTimeMs = 0L
@@ -53,7 +57,7 @@ class AttackActivity : AppCompatActivity() {
     private var retryEvents = 0
 
     companion object {
-        var FrameworkVersion = 1.3
+        var FrameworkVersion = 1.4
         var loggingStatus = true
     }
 
@@ -88,6 +92,8 @@ class AttackActivity : AppCompatActivity() {
         viewTxSeconds = findViewById(R.id.editTextTxSeconds)
         viewSleepSeconds = findViewById(R.id.editTextSleepSeconds)
         spinnerPayloadPattern = findViewById(R.id.spinnerPayloadPattern)
+        viewPayloadSize = findViewById(R.id.editTextPayloadSize)
+        switchBombard = findViewById(R.id.switchBombard)
         spinnerAttackType = findViewById(R.id.spinnerAttackType)
         buttonStartStop = findViewById(R.id.buttonStartStop)
         logAttack = findViewById(R.id.logTextView)
@@ -159,6 +165,21 @@ class AttackActivity : AppCompatActivity() {
             }
         }
 
+        // Payload size (bytes; 0 = automático)
+        viewPayloadSize.doAfterTextChanged { str ->
+            if (str != null && str.toString().isNotEmpty() && str.isDigitsOnly()) {
+                payloadSize = str.toString().toInt()
+            }
+        }
+
+        // Bombard mode (conectar → ráfaga → cerrar, en ciclo rápido)
+        switchBombard.setOnCheckedChangeListener { _, checked ->
+            bombard = checked
+            if (checked) {
+                logAttack.append("\n> Modo bombardeo: ciclos rápidos conectar/enviar/cerrar")
+            }
+        }
+
         // Logging Switch listener
         switchLog.setOnCheckedChangeListener { _, isChecked ->
             loggingStatus = isChecked
@@ -182,7 +203,9 @@ class AttackActivity : AppCompatActivity() {
             rateDelayMs = delayMs,
             txSeconds = txSeconds,
             sleepSeconds = sleepSeconds,
-            payloadPattern = PayloadPattern.values()[spinnerPayloadPattern.selectedItemPosition]
+            payloadPattern = PayloadPattern.values()[spinnerPayloadPattern.selectedItemPosition],
+            bombard = bombard,
+            payloadSize = payloadSize
         )
 
         startTimeMs = System.currentTimeMillis()
@@ -212,7 +235,7 @@ class AttackActivity : AppCompatActivity() {
             logAttack,
             "Ataque iniciado: ${selectedType.displayName} sobre ${targets.size} objetivo(s) | " +
                 "Intensidad: $threads | Delay: ${delayMs}ms | TX: ${txSeconds}s | Sleep: ${sleepSeconds}s | " +
-                "Patrón: ${params.payloadPattern.displayName}"
+                "Patrón: ${params.payloadPattern.displayName} | Payload: ${payloadSize}B | Bombardeo: $bombard"
         )
         Toast.makeText(
             this,

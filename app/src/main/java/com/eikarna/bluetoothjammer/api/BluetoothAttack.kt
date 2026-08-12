@@ -24,6 +24,10 @@ enum class AttackType(val displayName: String, val description: String) {
         "L2CAP Flood (clásico)",
         "Inunda conexiones RFCOMM/L2CAP con UUIDs aleatorios y satura el socket."
     ),
+    RFCOMM_CHANNEL_FLOOD(
+        "RFCOMM Channel Flood",
+        "Barre canales RFCOMM 1-30 vía reflexión (API oculta) y satura los sockets conectados."
+    ),
     GATT_FLOOD(
         "GATT Flood (BLE)",
         "Llena la tabla de conexiones GATT del periférico BLE para bloquear a su dueño."
@@ -45,19 +49,29 @@ enum class AttackType(val displayName: String, val description: String) {
         "Se hace pasar por perfiles conocidos (A2DP, HID, HFP…) probando conexión con sus UUIDs."
     ),
     COMBO(
-        "Combo (L2CAP+GATT+Pairing+SDP)",
-        "Ataque en capas: L2CAP, GATT, Pairing y SDP simultáneos sobre el mismo objetivo."
+        "Combo (L2CAP+RFCOMM+GATT+Pairing+SDP)",
+        "Ataque en capas: L2CAP, RFCOMM, GATT, Pairing y SDP simultáneos sobre el mismo objetivo."
     );
 
     fun create(address: String, params: AttackParams = AttackParams()): BluetoothAttack {
         val base = when (this) {
-            L2CAP_FLOOD -> L2capFloodAttack(address, params.threads, params.rateDelayMs, params.payloadPattern)
+            L2CAP_FLOOD -> L2capFloodAttack(
+                address, params.threads, params.rateDelayMs,
+                params.payloadPattern, params.payloadSize, params.bombard
+            )
+            RFCOMM_CHANNEL_FLOOD -> RfcommChannelFloodAttack(
+                address, params.threads, params.rateDelayMs,
+                params.payloadPattern, params.payloadSize
+            )
             GATT_FLOOD -> GattFloodAttack(address, params.threads, params.rateDelayMs)
             PAIRING_FLOOD -> PairingFloodAttack(address, params.threads, params.rateDelayMs)
             SDP_FLOOD -> SdpFloodAttack(address, params.threads, params.rateDelayMs)
             ADVERTISE_FLOOD -> AdvertiseFloodAttack(address)
             PROFILE_SPOOF -> ProfileSpoofAttack(address, params.threads, params.rateDelayMs)
-            COMBO -> ComboAttack(address, params.threads, params.rateDelayMs, params.payloadPattern)
+            COMBO -> ComboAttack(
+                address, params.threads, params.rateDelayMs,
+                params.payloadPattern, params.payloadSize, params.bombard
+            )
         }
         return if (params.txSeconds >= 1 && params.sleepSeconds >= 1) {
             DutyCycleAttack(base, params.txSeconds, params.sleepSeconds)

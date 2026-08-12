@@ -1,4 +1,4 @@
-# BluetoothJammer — Edición Mejorada (v1.3)
+# BluetoothJammer — Edición Mejorada (v1.4)
 
 Herramienta de **investigación educativa** sobre seguridad Bluetooth para Android (Kotlin / Material 3).
 
@@ -15,8 +15,29 @@ Versión mejorada del proyecto original [eikarna/BluetoothJammer](https://github
 > - La aplicación incluye un **aviso obligatorio al abrirse** y recordatorios al iniciar cualquier ataque.
 > - El desarrollador, colaboradores y mantenedores **no se hacen responsables del uso indebido** de esta herramienta. El uso correcto o incorrecto es responsabilidad exclusiva del usuario final.
 > - Esta herramienta **no** es un jammer de radiofrecuencia: un teléfono no puede emitir RF arbitraria. Implementa técnicas de denegación de servicio a nivel de protocolo Bluetooth (L2CAP/RFCOMM, GATT, SDP, advertising BLE) dentro de los límites del SDK de Android.
+> - Esta versión es **EXCLUSIVAMENTE para uso experimental, educativo y privado**. No está pensada para su uso fuera de un entorno controlado de investigación.
 
 ---
+
+## 📜 Licencia
+
+Este fork se publica bajo **licencia MIT** (ver [LICENSE](LICENSE)), pero con una salvedad legal importante:
+
+- El repositorio original ([eikarna/BluetoothJammer](https://github.com/eikarna/BluetoothJammer)) **no tiene licencia**, por lo que su autor conserva todos los derechos sobre el código original.
+- La licencia MIT cubre **solo las modificaciones y el código nuevo** aportados por este fork (manuti), tal y como se detalla en el propio fichero LICENSE.
+- El autor original no ha otorgado permiso explícito para esta publicación; la intención de este fork es contribuir al estudio educativo de la seguridad Bluetooth con atribución clara al trabajo original.
+
+**Responsabilidades legales:** este software se proporciona "TAL CUAL", sin garantías de ningún tipo. El autor de este fork **no se hace responsable** de ningún daño, pérdida o consecuencia legal derivada del uso indebido de esta herramienta. Es responsabilidad exclusiva del usuario final conocer y respetar la legislación local (FCC, normativa europea, etc.) y usar la aplicación únicamente con dispositivos de su propiedad y con fines educativos/privados.
+
+---
+
+## Novedades de la versión 1.4
+
+- **RFCOMM Channel Flood**: barre los canales RFCOMM 1-30 usando la API oculta `createInsecureRfcommSocket(int)` vía reflexión (técnica clásica de SPP; puede ser bloqueada por la *hidden API enforcement* en Android 9+ — se registra en el log).
+- **Modo bombardeo**: ciclos rápidos conectar → enviar ráfaga → cerrar (en vez de mantener el socket), para agotar recursos por saturación de ciclos.
+- **Tamaño de payload configurable** (bytes): 0 = automático (maxTransmitPacketSize o 600), p. ej. 990 B.
+- **Combo ampliado**: ahora combina L2CAP + **RFCOMM channel** + GATT + Pairing + SDP (5 capas).
+- Ideas adoptadas de [hackeringtrue/bluetooth2jam](https://github.com/hackeringtrue/bluetooth2jam) (barrido de canales, bombardeo, payload 990 B).
 
 ## Novedades de la versión 1.3
 
@@ -90,6 +111,7 @@ Se eligen con un selector (Spinner) una vez seleccionado el objetivo. **Threads*
 | Tipo | Capa | Descripción | Intensidad |
 |---|---|---|---|
 | **L2CAP Flood (clásico)** | RFCOMM/L2CAP | Abre sockets RFCOMM con UUIDs aleatorios y satura el socket conectado. | 1–64 workers |
+| **RFCOMM Channel Flood** | RFCOMM | Barre canales RFCOMM 1-30 vía reflexión (API oculta) y satura los sockets. | 1–30 workers |
 | **GATT Flood (BLE)** | GATT | Llena la tabla de conexiones GATT del periférico (la mayoría solo acepta unas pocas). | 4–64 conexiones paralelas |
 | **Pairing Flood** | Bonding | Inunda al objetivo de solicitudes de emparejamiento (BR/EDR). | 1–3 workers (el stack serializa) |
 | **SDP Query Storm** | SDP | Satura el servidor SDP con consultas de servicios repetidas. | 1–16 consultas concurrentes |
@@ -183,6 +205,8 @@ app/src/main/java/com/eikarna/bluetoothjammer/
 │   ├── DeviceMetadata.kt      # OUI→fabricante y UUID→perfil (tablas locales)
 │   ├── AttackTiming.kt        # Control de tasa con jitter (jitterDelay)
 │   ├── AttackDevices.kt       # L2capFloodAttack (flood RFCOMM/L2CAP)
+│   ├── FloodSupport.kt        # Bucle de flood compartido (payload/tamaño/rate)
+│   ├── RfcommChannelFloodAttack.kt # Barrido de canales RFCOMM 1-30 (reflexión)
 │   ├── GattFloodAttack.kt     # Flood de conexiones GATT (BLE)
 │   ├── PairingFloodAttack.kt  # Flood de emparejamiento clásico + BLE
 │   ├── SdpFloodAttack.kt      # Tormenta de consultas SDP
@@ -211,6 +235,7 @@ app/src/main/java/com/eikarna/bluetoothjammer/
 - Repositorio original: [eikarna/BluetoothJammer](https://github.com/eikarna/BluetoothJammer)
 - Fork con ideas adoptadas: [PIXELQUADRO07/BluetoothJammer](https://github.com/PIXELQUADRO07/BluetoothJammer) (AttackManager, logs estructurados)
 - Conceptos de jamming RF: [PortaPack Mayhem — Jammer TX](https://github.com/portapack-mayhem/mayhem-firmware/wiki/Jammer) (duty cycle TX/Sleep + jitter, tipos de señal)
+- Ideas no-root adoptadas: [hackeringtrue/bluetooth2jam](https://github.com/hackeringtrue/bluetooth2jam) (barrido de canales RFCOMM, bombardeo connect/disconnect, payload 990 B)
 - Inspiración y asistencia de desarrollo: ChatGPT-4o (repo original) y herramientas de desarrollo asistido (esta edición).
 
 ---

